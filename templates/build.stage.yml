@@ -1,0 +1,26 @@
+parameters:
+  repository: ''
+  baseFolder: ''
+  dockerfilePath: ''
+  dockerRegistryServiceConnection: ''
+  tag: '$(Build.BuildId)'
+  chartfilePath: ''
+  artifactName: 'charts'
+
+jobs:  
+- job: Build
+  displayName: Build
+  steps:
+  - task: Docker@2
+    displayName: Build and push an image to container registry
+    inputs:
+      command: buildAndPush
+      repository: ${{ parameters.repository }}
+      dockerfile: '${{ parameters.baseFolder }}/${{ parameters.dockerfilePath }}'
+      buildContext: ${{ parameters.baseFolder }}
+      containerRegistry: ${{ parameters.dockerRegistryServiceConnection }}
+      tags: |
+        ${{ parameters.tag }}
+        
+  - upload: '${{ parameters.baseFolder }}/${{ parameters.chartfilePath }}'
+    artifact: ${{ parameters.artifactName }}

@@ -1,0 +1,110 @@
+trigger:
+  branches:
+    include:
+    - master
+  paths:
+    include:
+    - src/BasketApi/*
+    - src/Common/*
+
+resources:
+- repo: self
+
+variables:
+  serviceGroup: scanpay
+  serviceName: basketservice
+  baseFolder: src
+  tag: '$(Build.BuildId)'
+  dockerRegistryServiceConnection: 'fefe056f-1c9c-416e-8a33-8e0cec7d817f'
+  containerRegistry: 'aksregistrytst.azurecr.io'
+  imagePullSecret: 'aksregistrytst-auth'
+  chartsArtifactName: charts
+  migrationArtifactName: migration
+
+stages:
+  - stage: Build
+    displayName: Build stage
+    pool: 
+      vmImage: ubuntu-latest
+    jobs:
+    - template: ../templates/build.stage.yml
+      parameters:
+        repository: $(serviceGroup).$(serviceName)
+        baseFolder: $(baseFolder)
+        dockerFilePath: 'BasketApi/BasketApi.WebService/Dockerfile'
+        dockerRegistryServiceConnection: $(dockerRegistryServiceConnection)
+        tag: $(tag)
+        chartFilePath: 'BasketApi/BasketApi.WebService/charts/basketapiwebservice'
+        artifactName: $(chartsArtifactName)
+
+    - job: BuildDbMigrations
+      dependsOn: []
+      displayName:  Build Db Migrations
+      variables:
+        projectPath: 'src/BasketApi/BasketApi.DataBase.Console'
+        publishFolder: 'migration'
+      steps:
+      - script: dotnet publish -r win-x64 -c Release /p:PublishSingleFile=true -o $(publishFolder)
+        workingDirectory: $(projectPath)
+      - upload: '$(projectPath)/$(publishFolder)'
+        artifact: $(migrationArtifactName)
+
+  - stage: DeployDev
+    displayName: Deploy stage Dev
+    condition: and(succeeded(), not(startsWith(variables['Build.SourceBranch'], 'refs/pull/')))
+    dependsOn: Build
+    pool: 
+      vmImage: ubuntu-latest
+    variables: 
+      k8sDevSpacesHost: 'c886zfkrtx.weu.azds.io'
+    jobs:
+    - template: ../templates/deploy.steps.yml
+      parameters:
+        chartArtifactName: $(chartsArtifactName)
+        k8sNamespace: dev
+        imagePullSecret: $(imagePullSecret)
+        dockerRegistryServiceConnection: $(dockerRegistryServiceConnection)
+        values: |-
+          image:
+            repository: $(containerRegistry)/$(serviceGroup).$(serviceName)
+            tag: $(tag)
+          ingress:
+            enabled: true
+            hosts:
+              - $(serviceName).$(serviceGroup).$(k8sDevSpacesHost)
+            annotations:
+              kubernetes.io/ingress.class: traefik-azds
+          secrets:
+            ASPNETCORE:
+              ENVIRONMENT: Staging
+            APPSETTINGS:
+              BasketDb__RunMigrationOnStartup: !!string True
+              BasketDb__ConnectionString: $(BasketDb_ConnectionString)
+              OAuthBaseAddress: $(OAuthBaseAddress)
+        environment: "dev.dev"
+
+  - stage: DeployTst
+    displayName: Deploy stage Tst
+    dependsOn: DeployDev
+    pool: 
+      vmImage: ubuntu-latest
+    jobs:
+    - template: ../templates/deploy.steps.yml
+      parameters:
+        chartArtifactName: $(chartsArtifactName)
+        k8sNamespace: tst
+        imagePullSecret: $(imagePullSecret)
+        dockerRegistryServiceConnection: $(dockerRegistryServiceConnection)
+        values: |-
+          image:
+            repository: $(containerRegistry)/$(serviceGroup).$(serviceName)
+            tag: $(tag)
+          secrets:
+            ASPNETCORE:
+              ENVIRONMENT: Staging
+            APPSETTINGS:
+              BasketDb__ConnectionString: $(BasketDb_ConnectionString)
+              OAuthBaseAddress: $(OAuthBaseAddress)
+        environment: "tst.tst"      
+
+  
